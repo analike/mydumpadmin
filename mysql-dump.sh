@@ -10,9 +10,8 @@
 ##########################################################################
 
 CONFIGFILE=/etc/mydumpadmin/settings.conf
-
 source $CONFIGFILE
-TIME_FORMAT='%d%m%Y-%H%M'
+TIME_FORMAT='%Y-%m-%d_%H-%M'
 cTime=$(date +"${TIME_FORMAT}")
 LOGFILENAME=$LOG_PATH/mydumpadmin-${cTime}.txt
 CREDENTIALS="--defaults-file=$CREDENTIAL_FILE"
@@ -52,6 +51,8 @@ db_backup(){
                 [ $SFTP_ENABLE -eq 1 ] && sftp_backup
                 [ $S3_ENABLE -eq 1 ] && s3_backup
         done
+        [ $DELETE_OLD -eq 1 ] && delete_old
+        [ $RSYNC_ENABLE -eq 1 ] && rsync_backup
         [ $VERBOSE -eq 1 ] && echo "*** Backup completed ***"
         [ $VERBOSE -eq 1 ] && echo "*** Check backup files in ${FILE_PATH} ***"
 }
@@ -76,6 +77,9 @@ check_cmds(){
 	fi
 	if [ $SFTP_ENABLE -eq 1 ]; then
 		[ ! -x $SCP ] && close_on_error "FILENAME $SCP does not exists. Make sure correct path is set in $CONFIGFILE."
+	fi
+	if [ $RSYNC_ENABLE -eq 1 ]; then
+		[ ! -x $RSYNC ] && close_on_error "FILENAME $RSYNC does not exists. Make sure correct path is set in $CONFIGFILE."
 	fi
 }
 
@@ -102,11 +106,21 @@ EndFTP
 }
 
 sftp_backup(){
-
         [ $VERBOSE -eq 1 ] && echo "Uploading backup file to SFTP"
         cd ${FILE_PATH}
         ${SCP} -P ${SFTP_PORT}  "$FILE_NAME" ${SFTP_USERNAME}@${SFTP_HOST}:${SFTP_UPLOAD_DIR}/
 
+}
+
+rsync_backup(){
+        [ $VERBOSE -eq 1 ] && echo "Synchronizing backup files to ${RSYNC_HOST} via rsync"
+        DELETE_OPTION=""
+        [ $RSYNC_DELETE -eq 1 ] && DELETE_OPTION="--delete"
+        RSYNC_VERBOSE="";
+        [ $VERBOSE -eq 1 ] && RSYNC_VERBOSE="--verbose"
+        RSYNC_SSH_LAUNCH=()
+        [ $RSYNC_PORT -eq 22 ] && RSYNC_SSH_LAUNCH=(-e "ssh -p ${RSYNC_PORT}")
+        ${RSYNC} -ahP $RSYNC_VERBOSE $DELETE_OPTION "${RSYNC_SSH_LAUNCH[@]}" "${LOCAL_BACKUP_DIR}/" "${RSYNC_USERNAME}@${RSYNC_HOST}:${RSYNC_DIR}"
 }
 
 s3_backup(){
@@ -121,6 +135,17 @@ send_report(){
         then
                 cat ${LOGFILENAME} | mail -vs "Database dump report for `date +%D`" ${EMAILTO}
         fi
+}
+
+delete_old() {
+  if [ $DELETE_OLD -eq 1 ]
+  then
+        dlimit=$(( DELETE_LIMIT + 1 ))
+        cd $LOCAL_BACKUP_DIR
+        #Modified from source: https://stackoverflow.com/a/34862475
+        ls -tp | grep -e '/$' | tail -n +${dlimit} | xargs -d '\n' -r rm -rf --
+        cd - > /dev/null
+  fi
 }
 
 ### main ####
